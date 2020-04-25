@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+
+# Copyright © 2020 Xavier G. <xavier.yamltab@kindwolf.org>
+# This work is free. You can redistribute it and/or modify it under the
+# terms of the Do What The Fuck You Want To Public License, Version 2,
+# as published by Sam Hocevar. See the COPYING file for more details.
+
+from io import BufferedReader, BytesIO
+import os
+import sys
+import json
+import yaml
+import struct
+import argparse
+from datetime import datetime
+from binascii import hexlify
+
+# Documents used as reference to implement the keytab format:
+# [1] https://web.mit.edu/kerberos/krb5-1.12/doc/formats/keytab_file_format.html
+# [2] https://github.com/krb5/krb5/blob/master/src/lib/krb5/keytab/kt_file.c#L892
+# [3] https://github.com/krb5/krb5/blob/master/src/include/krb5/krb5.hin#L230
+
+DATA_LAYOUT_RAW = 0
+DATA_LAYOUT_FULL = 1
+DATA_LAYOUT_SIMPLE = 2
+DATA_LAYOUTS = {'raw': DATA_LAYOUT_RAW, 'full': DATA_LAYOUT_FULL, 'simple': DATA_LAYOUT_SIMPLE}
+
+DATE_TIME_FORMAT = '%Y-%m-%dT%H:%M:%SZ'
+
+KEYTAB_FIRST_BYTE = 0x05
+# Default prefix for struct's format strings, defining big-endian byte order:
+BIG_ENDIAN='>'
+DEFAULT_PREFIX=BIG_ENDIAN
+DEFAULT_ENCODING='ascii'
+VERBOSITY=1
+CALCSIZE={}
+
+# The following table is based on [3]:
+NAME_TYPES = {
+	'KRB5_NT_UNKNOWN': 0,
+	'KRB5_NT_PRINCIPAL': 1,
+	'KRB5_NT_SRV_INST': 2,
+	'KRB5_NT_SRV_HST': 3,
+	'KRB5_NT_SRV_XHST': 4,
+	'KRB5_NT_UID': 5,
+	'KRB5_NT_X500_PRINCIPAL': 6,
+	'KRB5_NT_SMTP_NAME': 7,
+	'KRB5_NT_ENTERPRISE_PRINCIPAL': 10,
+	'KRB5_NT_WELLKNOWN': 11,
+	'KRB5_NT_MS_PRINCIPAL': -128,
+	'KRB5_NT_MS_PRINCIPAL_AND_ID': -129,
+	'KRB5_NT_ENT_PRINCIPAL_AND_ID': -130,
+}
+
+ENC_TYPES = {
+	'NULL': 0,
+	'DES_CBC_CRC': 1,
+	'DES_CBC_MD4': 2,
+	'DES_CBC_MD5': 3,
+	'DES_CBC_RAW': 4,
+	'DES3_CBC_SHA': 5,
+	'DES3_CBC_RAW': 6,
+	'DES_HMAC_SHA1': 8,
+	'DSA_SHA1_CMS': 9,
+	'MD5_RSA_CMS': 10,
+	'SHA1_RSA_CMS': 11,
+	'RC2_CBC_ENV': 12,
+	'RSA_ENV': 13,
+	'RSA_ES_OAEP_ENV': 14,
+	'DES3_CBC_ENV': 15,
+	'DES3_CBC_SHA1': 16,
+	'AES128_CTS_HMAC_SHA1_96': 17,
+	'AES256_CTS_HMAC_SHA1_96': 18,
+	'AES128_CTS_HMAC_SHA256_128': 19,
+	'AES256_CTS_HMAC_SHA384_192': 20,
+	'ARCFOUR_HMAC': 23,
+	'ARCFOUR_HMAC_EXP': 24,
+	'CAMELLIA128_CTS_CMAC': 25,
+	'CAMELLIA256_CTS_CMAC': 26,
+	'UNKNOWN': 511,
+}
+
+class KeytabParsingError(Exception):
+	MESSAGE = 'Parsing eror: expected {size} bytes to unpack {format} but read {length} bytes instead: {data}'
+	def __init__(self, data, size, frmt):
+		self.data = data
+		self.size = size
+		self.format = frmt
+	def __str__(self):
+		return __class__.MESSAGE.format(**self.__dict__, length=len(self.data))
+
+def lookup(lookup_value, dictionary, default):
+	for name, value in dictionary.items():
+		if value == lookup_value:
+			return name
+	return default
+
+def int_to_name_type(lookup_value):
+	return lookup(lookup_value, NAME_TYPES, 'KRB5_NT_UNKNOWN')
+
+def int_to_enc_type(lookup_value):
+	return lookup(lookup_value, ENC_TYPES, 'ENCTYPE_UNKNOWN')
+
+def principal_to_spn(principal):
+	if principal['name_type_raw'] != 1:
+		return None
+	components = principal['components']
+	count = len(components)
+	if count < 1 or count > 3:
+		return None
+	for component in components:
+		if not component:
+			return None
+	spn = components[0]
+	if count >= 2:
+		spn += '/' + components[1]
+	if count == 3:
+		spn += ':' + components[2]
+	spn += '@' + principal['realm']
+	return spn
+
+def verbose(level, msg, *args, **kwargs):
+	if level <= VERBOSITY:
+		message = msg.format(*args, **kwargs)
+		sys.stderr.write(message + '\n')
+
+def unpack(buf, prefix, format):
+	"""
+	Wrapper around read(), struct.unpack() and struct.calcsize().
+	"""
+	actual_format = prefix + format
+	size = CALCSIZE.get(actual_format)
+	if size is None:
+		size = CALCSIZE[actual_format] = struct.calcsize(actual_format)
+	data = buf.read(size)
+	if len(data) < size:
+		raise KeytabParsingError(data, size, actual_format)
+	results = struct.unpack(actual_format, data)
+	return results[0] if len(results) == 1 else results
+
+def parse_data(buf, prefix=DEFAULT_PREFIX):
+	length = unpack(buf, prefix, 'H')
+	return buf.read(length)
+
+def parse_str(buf, prefix=DEFAULT_PREFIX, encoding=DEFAULT_ENCODING):
+	return parse_data(buf, prefix).decode(encoding)
+
+def parse_principal(buf, prefix=DEFAULT_PREFIX):
+	principal = {}
+	# [1] states "count of components (32 bits)" but [2] says int16:
+	component_count = unpack(buf, prefix, 'H')
+	principal['realm'] = parse_str(buf, prefix)
+	components = []
+	for i in range(component_count):
+		components.append(parse_str(buf, prefix))
+	principal['components'] = components
+	# [3] states int32:
+	principal['name_type_raw'] = unpack(buf, prefix, 'i')
+	return principal
+
+def parse_entry(buf, prefix=DEFAULT_PREFIX):
+	entry = {}
+	entry['principal'] = parse_principal(buf, prefix)
+	entry['timestamp'], entry['kvno'], entry['enctype_raw'], entry['key_length'] = unpack(buf, prefix, 'IBHH')
+	entry['key'] = buf.read(entry['key_length'])
+	return entry
+
+def parse_record(buf, prefix=DEFAULT_PREFIX):
+	record = {'type': 'record'}
+	record['entry'] = parse_entry(buf, prefix)
+	record['tail'] = buf.read()
+	return record
+
+def parse_keytab(buf, args):
+	second_byte = buf.read(2)[1]
+	verbose(2, 'keytab v{}', second_byte)
+	if second_byte == 1:
+		verbose(1, 'Keytab v1 not supported yet!')
+		sys.exit(1)
+	elif second_byte == 2:
+		# Version 2 always uses big-endian byte order:
+		prefix = BIG_ENDIAN
+	else:
+		verbose(1, 'Unknown keytab version: v{}', second_byte)
+		sys.exit(1)
+
+	keytab = {
+		'version': second_byte,
+		'records': [],
+	}
+	while True:
+		try:
+			record_length = unpack(buf, prefix, 'i')
+		except KeytabParsingError as kpe:
+			if len(kpe.data):
+				verbose(1, 'Premature end of file? Got {} as record length.', kpe.data)
+			break
+		if not record_length:
+			break
+		verbose(3, 'Record #{} of length {}', len(keytab['records']) + 1, record_length)
+		record = buf.read(abs(record_length))
+		if record_length > 0:
+			record = parse_record(BufferedReader(BytesIO(record)), prefix)
+		else:
+			record = {'type': 'hole', 'data': record}
+		record['length'] = record_length
+		keytab['records'].append(record)
+	return keytab
+
+def enrich_keytab(keytab):
+	"""
+	Enrich records with extra information suitable for human readers.
+	"""
+	for record in keytab['records']:
+		if 'entry' not in record:
+			continue
+		entry = record['entry']
+		entry['date'] = datetime.utcfromtimestamp(entry['timestamp']).strftime(DATE_TIME_FORMAT)
+		if 'name_type_raw' in entry['principal']:
+			entry['principal']['name_type'] = int_to_name_type(entry['principal']['name_type_raw'])
+		spn = principal_to_spn(entry['principal'])
+		if spn:
+			entry['spn'] = spn
+		entry['enctype'] = int_to_enc_type(entry['enctype_raw'])
+		if 'tail' in record:
+			# [1] states: Some implementations of Kerberos recognize a 32-bit key version at the end of
+			# an entry, if the record length is at least 4 bytes longer than the entry and the value of
+			# those 32 bits is not 0. If present, this key version supersedes the 8-bit key version.
+			if len(record['tail']) >= 4:
+				tail_kvno = struct.unpack('>I', record['tail'][0:4])[0]
+				if tail_kvno:
+					entry['tail_kvno'] = tail_kvno
+					# If kvno is zero, assume the one found in the tail is the one that matters:
+					if not entry['kvno']:
+						entry['actual_kvno'] = entry['tail_kvno']
+			if 'actual_kvno' not in entry:
+				entry['actual_kvno'] = entry['kvno']
+	return keytab
+
+def simplify_keytab(keytab):
+	"""
+	Simplify the keytab to make it suitable for edition.
+	"""
+	simplified = {'version': keytab['version'], 'entries': []}
+	for record in keytab['records']:
+		if 'entry' not in record:
+			continue
+		entry = record['entry']
+		simple_entry = {}
+		if 'spn' in entry:
+			simple_entry['spn'] = entry['spn']
+		simple_entry['principal'] = {}
+		for key in ('name_type', 'components', 'realm'):
+			if key in entry['principal']:
+				simple_entry['principal'][key] = entry['principal'][key]
+		simple_entry['kvno'] = entry.get('actual_kvno', entry['kvno'])
+		for key in ('date', 'enctype', 'key'):
+			if key in entry:
+				simple_entry[key] = entry[key]
+		simplified['entries'].append(simple_entry)
+	return simplified
+
+def prepare_serialization(obj):
+	"""
+	Prepare keytab for serialization.
+	"""
+	if type(obj) is dict:
+		for key, value in obj.items():
+			obj[key] = prepare_serialization(value)
+	elif type(obj) is list:
+		for index, value in enumerate(obj):
+			obj[index] = prepare_serialization(value)
+	elif type(obj) is bytes:
+		obj = hexlify(obj).decode(DEFAULT_ENCODING)
+	return obj
+
+def keytab_data(buf, args):
+	keytab = parse_keytab(buf, args)
+	layout = DATA_LAYOUTS.get(args.data_layout, DATA_LAYOUT_FULL)
+	if layout >= DATA_LAYOUT_FULL:
+		keytab = enrich_keytab(keytab)
+	if layout >= DATA_LAYOUT_SIMPLE:
+		keytab = simplify_keytab(keytab)
+	return keytab
+
+def keytab_to_yaml(buf, args):
+	keytab = keytab_data(buf, args)
+	final_keytab = prepare_serialization(keytab)
+	if args.output_format == 'yaml':
+		yaml.dump(final_keytab, sys.stdout, width=160, sort_keys=False)
+	else:
+		json.dump(final_keytab, sys.stdout, indent=4)
+
+def yaml_to_keytab(fd):
+	data = yaml.load(fd.read(), Loader=yaml.SafeLoader)
+	print('YAML:', data)
+
+def parse_args():
+	parser = argparse.ArgumentParser(description='Keytab <-> YAML/JSON convertor.')
+	parser.add_argument('--verbose', '-v', dest='verbose', action='count', help='increase verbosity level', default=VERBOSITY)
+	parser.add_argument('--data-layout', '-l',  dest='data_layout', choices=DATA_LAYOUTS.keys(), default='simple', help='data layout (keytab to YAML/JSON only)')
+	parser.add_argument('--output-format', '-f', dest='output_format', choices=['json', 'yaml'], default='yaml', help='output format (keytab to YAML/JSON only)')
+	parser.add_argument('input', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer, help='input file; defaults to standard input')
+	args = parser.parse_args()
+	return args
+
+def main():
+	args = parse_args()
+	global VERBOSITY
+	VERBOSITY=args.verbose
+	buf = args.input
+	first_byte = buf.peek(1)[0]
+	if first_byte == KEYTAB_FIRST_BYTE:
+		keytab_to_yaml(buf, args)
+	else:
+		yaml_to_keytab(buf, args)
+
+if __name__ == '__main__':
+	main()
