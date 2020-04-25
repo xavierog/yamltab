@@ -30,6 +30,8 @@ DATE_TIME_FORMAT = '%Y-%m-%dT%H:%M:%SZ'
 KEYTAB_FIRST_BYTE = 0x05
 # Default prefix for struct's format strings, defining big-endian byte order:
 BIG_ENDIAN='>'
+LITTLE_ENDIAN='<'
+NATIVE_ENDIANNESS='='
 DEFAULT_PREFIX=BIG_ENDIAN
 DEFAULT_ENCODING='ascii'
 VERBOSITY=1
@@ -102,7 +104,7 @@ def int_to_enc_type(lookup_value):
 	return lookup(lookup_value, ENC_TYPES, 'ENCTYPE_UNKNOWN')
 
 def principal_to_spn(principal):
-	if principal['name_type_raw'] != 1:
+	if principal.get('name_type_raw') != NAME_TYPES['KRB5_NT_PRINCIPAL']:
 		return None
 	components = principal['components']
 	count = len(components)
@@ -145,29 +147,34 @@ def parse_data(buf, prefix=DEFAULT_PREFIX):
 def parse_str(buf, prefix=DEFAULT_PREFIX, encoding=DEFAULT_ENCODING):
 	return parse_data(buf, prefix).decode(encoding)
 
-def parse_principal(buf, prefix=DEFAULT_PREFIX):
+def parse_principal(buf, prefix=DEFAULT_PREFIX, version=2):
 	principal = {}
 	# [1] states "count of components (32 bits)" but [2] says int16:
 	component_count = unpack(buf, prefix, 'H')
+	# [1] states "[includes realm in version 1]"
+	if version == 1:
+		component_count -= 1
 	principal['realm'] = parse_str(buf, prefix)
 	components = []
 	for i in range(component_count):
 		components.append(parse_str(buf, prefix))
 	principal['components'] = components
-	# [3] states int32:
-	principal['name_type_raw'] = unpack(buf, prefix, 'i')
+	# [1] states "[omitted in version 1]"
+	if version != 1:
+		# [3] states int32:
+		principal['name_type_raw'] = unpack(buf, prefix, 'i')
 	return principal
 
-def parse_entry(buf, prefix=DEFAULT_PREFIX):
+def parse_entry(buf, prefix=DEFAULT_PREFIX, version=2):
 	entry = {}
-	entry['principal'] = parse_principal(buf, prefix)
+	entry['principal'] = parse_principal(buf, prefix, version)
 	entry['timestamp'], entry['kvno'], entry['enctype_raw'], entry['key_length'] = unpack(buf, prefix, 'IBHH')
 	entry['key'] = buf.read(entry['key_length'])
 	return entry
 
-def parse_record(buf, prefix=DEFAULT_PREFIX):
+def parse_record(buf, prefix=DEFAULT_PREFIX, version=2):
 	record = {'type': 'record'}
-	record['entry'] = parse_entry(buf, prefix)
+	record['entry'] = parse_entry(buf, prefix, version)
 	record['tail'] = buf.read()
 	return record
 
@@ -175,8 +182,12 @@ def parse_keytab(buf, args):
 	second_byte = buf.read(2)[1]
 	verbose(2, 'keytab v{}', second_byte)
 	if second_byte == 1:
-		verbose(1, 'Keytab v1 not supported yet!')
-		sys.exit(1)
+		# Version 1 uses native byte order:
+		prefix = NATIVE_ENDIANNESS
+		if args.v1_endianness == 'big':
+			prefix = BIG_ENDIAN
+		elif args.v1_endianness == 'little':
+			prefix = LITTLE_ENDIAN
 	elif second_byte == 2:
 		# Version 2 always uses big-endian byte order:
 		prefix = BIG_ENDIAN
@@ -200,7 +211,7 @@ def parse_keytab(buf, args):
 		verbose(3, 'Record #{} of length {}', len(keytab['records']) + 1, record_length)
 		record = buf.read(abs(record_length))
 		if record_length > 0:
-			record = parse_record(BufferedReader(BytesIO(record)), prefix)
+			record = parse_record(BufferedReader(BytesIO(record)), prefix, second_byte)
 		else:
 			record = {'type': 'hole', 'data': record}
 		record['length'] = record_length
@@ -300,6 +311,7 @@ def parse_args():
 	parser.add_argument('--verbose', '-v', dest='verbose', action='count', help='increase verbosity level', default=VERBOSITY)
 	parser.add_argument('--data-layout', '-l',  dest='data_layout', choices=DATA_LAYOUTS.keys(), default='simple', help='data layout (keytab to YAML/JSON only)')
 	parser.add_argument('--output-format', '-f', dest='output_format', choices=['json', 'yaml'], default='yaml', help='output format (keytab to YAML/JSON only)')
+	parser.add_argument('--v1-endianness', '-e', dest='v1_endianness', choices=['native', 'little', 'big'], default='native', help='Enforce endianness (keytab v1 to YAML/JSON only)')
 	parser.add_argument('input', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer, help='input file; defaults to standard input')
 	args = parser.parse_args()
 	return args
