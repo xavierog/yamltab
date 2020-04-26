@@ -225,7 +225,10 @@ def enrich_keytab(keytab):
 	"""
 	Enrich records with extra information suitable for human readers.
 	"""
-	for record in keytab['records']:
+	# Reflect whether the keytab uses record tails to store 32-bits kvno:
+	records = keytab.pop('records')
+	keytab['kvno_in_tail'] = False
+	for record in records:
 		if 'entry' not in record:
 			continue
 		entry = record['entry']
@@ -247,15 +250,18 @@ def enrich_keytab(keytab):
 					# tail_kvno overrides kvno if non-zero:
 					if entry['tail_kvno']:
 						entry['actual_kvno'] = entry['tail_kvno']
+						keytab['kvno_in_tail'] = True
 			if 'actual_kvno' not in entry:
 				entry['actual_kvno'] = entry['kvno']
+	# Reintroduce records after kvno_in_tail for convenience:
+	keytab['records'] = records
 	return keytab
 
 def simplify_keytab(keytab):
 	"""
 	Simplify the keytab to make it suitable for edition.
 	"""
-	simplified = {'version': keytab['version'], 'entries': []}
+	simplified = {'version': keytab['version'], 'kvno_in_tail': keytab['kvno_in_tail'], 'entries': []}
 	for record in keytab['records']:
 		if 'entry' not in record:
 			continue
