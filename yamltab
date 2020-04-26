@@ -226,10 +226,7 @@ def enrich_keytab(keytab):
 	"""
 	Enrich records with extra information suitable for human readers.
 	"""
-	# Reflect whether the keytab uses record tails to store 32-bits kvno:
-	records = keytab.pop('records')
-	keytab['kvno_in_tail'] = False
-	for record in records:
+	for record in keytab['records']:
 		if 'entry' not in record:
 			continue
 		entry = record['entry']
@@ -246,23 +243,17 @@ def enrich_keytab(keytab):
 			# those 32 bits is not 0. If present, this key version supersedes the 8-bit key version.
 			if len(record['tail']) >= 4:
 				tail_kvno = struct.unpack('>I', record['tail'][0:4])[0]
-				if tail_kvno:
-					entry['tail_kvno'] = tail_kvno
-					# tail_kvno overrides kvno if non-zero:
-					if entry['tail_kvno']:
-						entry['actual_kvno'] = entry['tail_kvno']
-						keytab['kvno_in_tail'] = True
+				if tail_kvno or not entry['kvno']:
+					entry['actual_kvno'] = entry['tail_kvno'] = tail_kvno
 			if 'actual_kvno' not in entry:
 				entry['actual_kvno'] = entry['kvno']
-	# Reintroduce records after kvno_in_tail for convenience:
-	keytab['records'] = records
 	return keytab
 
 def simplify_keytab(keytab):
 	"""
 	Simplify the keytab to make it suitable for edition.
 	"""
-	simplified = {'version': keytab['version'], 'kvno_in_tail': keytab['kvno_in_tail'], 'entries': []}
+	simplified = {'version': keytab['version'], 'entries': []}
 	for record in keytab['records']:
 		if 'entry' not in record:
 			continue
@@ -275,6 +266,8 @@ def simplify_keytab(keytab):
 			if key in entry['principal']:
 				simple_entry['principal'][key] = entry['principal'][key]
 		simple_entry['kvno'] = entry.get('actual_kvno', entry['kvno'])
+		if 'tail_kvno' in entry:
+			simple_entry['kvno_in_tail'] = True
 		for key in ('date', 'enctype', 'key'):
 			if key in entry:
 				simple_entry[key] = entry[key]
@@ -425,12 +418,12 @@ def simple_principal_to_full(inentry, index, entry):
 	elif 'spn' in inentry:
 		entry['principal'] = spn_to_principal(inentry['spn'])
 
-def simple_kvno_to_full(inentry, index, entry, record, kvno_in_tail=False):
+def simple_kvno_to_full(inentry, index, entry, record):
 	if 'kvno' in inentry:
 		entry['actual_kvno'] = inentry['kvno']
 		kvno_too_big = inentry['kvno'] > 255
 		entry['kvno'] = 0 if kvno_too_big else inentry['kvno']
-		if kvno_in_tail:
+		if inentry.get('kvno_in_tail', False):
 			entry['tail_kvno'] = inentry['kvno']
 			record['tail'] = hexlify(struct.pack('>I', inentry['kvno']))
 		elif kvno_too_big:
@@ -465,14 +458,13 @@ def simple_keytab_to_full(indata):
 	now = int(datetime.now().timestamp())
 	data = {
 		'version': indata.get('version', 2),
-		'kvno_in_tail': indata.get('kvno_in_tail', False),
 		'records': [],
 	}
 	for index, inentry in enumerate(indata.get('entries', [])):
 		entry = {}
 		record = {'entry': entry}
 		simple_principal_to_full(inentry, index, entry)
-		simple_kvno_to_full(inentry, index, entry, record, data['kvno_in_tail'])
+		simple_kvno_to_full(inentry, index, entry, record)
 		simple_timestamp_to_full(inentry, index, entry)
 		simple_enctype_to_full(inentry, index, entry)
 		if 'key' in inentry:
