@@ -7,6 +7,7 @@
 
 from io import BufferedReader, BytesIO
 import os
+import re
 import sys
 import json
 import yaml
@@ -398,8 +399,93 @@ def raw_keytab_to_binary(indata):
 			raise KeytabComposingError('Unknown record type in record #%d' % index)
 	return data
 
+def spn_to_principal(spn, name_type='KRB5_NT_PRINCIPAL'):
+	principal = {'name_type': name_type}
+	principal['name_type_raw'] = NAME_TYPES[name_type]
+	rem = re.match(r'((?P<comp1>[^/]+)/)?(?P<comp2>[^:]+)(?::(?P<comp3>[^@]+))?@(?P<realm>.+)', spn)
+	if not rem:
+		raise KeytabComposingError('Cannot parse SPN %s into principal' % spn)
+	principal['realm'] = rem.group('realm')
+	principal['components'] = []
+	for name, component in rem.groupdict():
+		if name.startswith('comp') and component is not None:
+			principal['components'].append(component)
+	return principal
+
+def simple_principal_to_full(inentry, index, entry):
+	if 'principal' in inentry:
+		principal = entry['principal'] = inentry['principal']
+		if 'name_type_raw' not in principal:
+			try:
+				principal['name_type_raw'] = NAME_TYPES[principal['name_type']]
+			except KeyError:
+				message = 'Invalid or unknown name_type specified in entry #%d'
+				message += '; use name_type_raw to enforce an arbitrary value'
+				raise KeytabParsingError(message % index)
+	elif 'spn' in inentry:
+		entry['principal'] = spn_to_principal(inentry['spn'])
+
+def simple_kvno_to_full(inentry, index, entry, record, kvno_in_tail=False):
+	if 'kvno' in inentry:
+		entry['actual_kvno'] = inentry['kvno']
+		kvno_too_big = inentry['kvno'] > 255
+		entry['kvno'] = 0 if kvno_too_big else inentry['kvno']
+		if kvno_in_tail:
+			entry['tail_kvno'] = inentry['kvno']
+			record['tail'] = hexlify(struct.pack('>I', inentry['kvno']))
+		elif kvno_too_big:
+			message = 'Cannot store kvno > 255 without kvno_in_tail in entry #%d'
+			raise KeytabComposingError(message % index)
+
+def simple_timestamp_to_full(inentry, index, entry):
+	if 'timestamp' in inentry:
+		entry['timestamp'] = inentry['timestamp']
+	elif 'date' in inentry:
+		if inentry['date'] == 'now':
+			entry['timestamp'] = now
+		else:
+			try:
+				parsed_date = datetime.strptime(inentry['date'], DATE_TIME_FORMAT)
+				entry['timestamp'] = int(parsed_date.timestamp())
+			except:
+				raise KeytabParsingError('Invalid date specified in entry #%d' % index)
+
+def simple_enctype_to_full(inentry, index,  entry):
+	if 'enctype_raw' in inentry:
+		entry['enctype_raw'] = inentry['enctype_raw']
+	elif 'enctype' in inentry:
+		try:
+			entry['enctype_raw'] = ENC_TYPES[inentry['enctype']]
+		except KeyError:
+			message = 'Invalid or unknown enctype specified in entry #%d'
+			message += '; use enctype_raw to enforce an arbitrary value'
+			raise KeytabParsingError(message % index)
+
+def simple_keytab_to_full(indata):
+	now = int(datetime.now().timestamp())
+	data = {
+		'version': indata.get('version', 2),
+		'kvno_in_tail': indata.get('kvno_in_tail', False),
+		'records': [],
+	}
+	for index, inentry in enumerate(indata.get('entries', [])):
+		entry = {}
+		record = {'entry': entry}
+		simple_principal_to_full(inentry, index, entry)
+		simple_kvno_to_full(inentry, index, entry, record, data['kvno_in_tail'])
+		simple_timestamp_to_full(inentry, index, entry)
+		simple_enctype_to_full(inentry, index, entry)
+		if 'key' in inentry:
+			entry['key'] = inentry['key']
+		data['records'].append(record)
+	return data
+
 def yaml_to_keytab(buf, args):
 	data = yaml.load(buf, Loader=yaml.SafeLoader)
+	if 'entries' in data:
+		# If the provided structure exposes "entries" rather than "records",
+		# then it very likely features the "simple" data layout.
+		data = simple_keytab_to_full(data)
 	result = raw_keytab_to_binary(data)
 	sys.stdout.buffer.write(result)
 
