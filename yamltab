@@ -274,6 +274,11 @@ def simplify_keytab(keytab):
 		simplified['entries'].append(simple_entry)
 	return simplified
 
+def to_bytes(value):
+	if type(value) is bytes:
+		return value
+	return unhexlify(value)
+
 def prepare_serialization(obj):
 	"""
 	Prepare keytab for serialization.
@@ -343,7 +348,7 @@ def raw_entry_to_binary(entry, index):
 			raise KeytabComposingError('invalid %s data in entry #%d' % (key, index))
 	data = raw_principal_to_binary(entry['principal'], index)
 	try:
-		key_data = unhexlify(entry['key'])
+		key_data = to_bytes(entry['key'])
 	except:
 		raise KeytabComposingError('invalid key data in entry #%d' % index)
 	data += struct.pack('>IBHH', entry['timestamp'], entry['kvno'], entry['enctype_raw'], len(key_data))
@@ -357,7 +362,7 @@ def raw_record_to_binary(record, index):
 	data += raw_entry_to_binary(record['entry'], index)
 	if 'tail' in record:
 		try:
-			data += unhexlify(record['tail'])
+			data += to_bytes(record['tail'])
 		except:
 			raise KeytabComposingError('invalid tail data in record #%d' % index)
 	return struct.pack('>i', len(data)) + data
@@ -375,7 +380,7 @@ def raw_hole_to_binary(hole, index):
 		raise KeytabComposingError('invalid length in record #%d' % index)
 	if 'data' in record:
 		try:
-			hole_data = unhexlify(record['data'])
+			hole_data = to_bytes(record['data'])
 		except:
 			raise KeytabComposingError('invalid data in record #%d' % index)
 		if len(hole_data) != length:
@@ -432,7 +437,7 @@ def simple_kvno_to_full(inentry, index, entry, record):
 		entry['kvno'] = 0 if kvno_too_big else inentry['kvno']
 		if inentry.get('kvno_in_tail', False):
 			entry['tail_kvno'] = inentry['kvno']
-			record['tail'] = hexlify(struct.pack('>I', inentry['kvno']))
+			record['tail'] = struct.pack('>I', inentry['kvno'])
 		elif kvno_too_big:
 			message = 'Cannot store kvno > 255 without kvno_in_tail in entry #%d'
 			raise KeytabComposingError(message % index)
@@ -478,7 +483,7 @@ def simple_keytab_to_full(indata):
 		simple_enctype_to_full(inentry, index, entry)
 		if 'key' in inentry:
 			entry['key'] = inentry['key']
-			entry['key_length'] = len(unhexlify(inentry['key']))
+			entry['key_length'] = len(to_bytes(inentry['key']))
 		data['records'].append(record)
 	return data
 
