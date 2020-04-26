@@ -446,7 +446,9 @@ def simple_principal_to_full(inentry, index, entry):
 				message = 'Invalid or unknown name_type specified in entry #%d'
 				message += '; use name_type_raw to enforce an arbitrary value'
 				raise KeytabParsingError(message % index)
-		entry['spn'] = principal_to_spn(principal)
+		spn = principal_to_spn(principal)
+		if spn:
+			entry['spn'] = spn
 	elif 'spn' in inentry:
 		entry['spn'] = inentry['spn']
 		entry['principal'] = spn_to_principal(inentry['spn'])
