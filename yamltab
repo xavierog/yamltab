@@ -244,8 +244,8 @@ def enrich_keytab(keytab):
 				tail_kvno = struct.unpack('>I', record['tail'][0:4])[0]
 				if tail_kvno:
 					entry['tail_kvno'] = tail_kvno
-					# If kvno is zero, assume the one found in the tail is the one that matters:
-					if not entry['kvno']:
+					# tail_kvno overrides kvno if non-zero:
+					if entry['tail_kvno']:
 						entry['actual_kvno'] = entry['tail_kvno']
 			if 'actual_kvno' not in entry:
 				entry['actual_kvno'] = entry['kvno']
