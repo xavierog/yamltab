@@ -13,7 +13,7 @@ import yaml
 import struct
 import argparse
 from datetime import datetime
-from binascii import hexlify
+from binascii import hexlify, unhexlify
 
 # Documents used as reference to implement the keytab format:
 # [1] https://web.mit.edu/kerberos/krb5-1.12/doc/formats/keytab_file_format.html
@@ -90,6 +90,9 @@ class KeytabParsingError(Exception):
 		self.format = frmt
 	def __str__(self):
 		return __class__.MESSAGE.format(**self.__dict__, length=len(self.data))
+
+class KeytabComposingError(Exception):
+	pass
 
 def lookup(lookup_value, dictionary, default):
 	for name, value in dictionary.items():
@@ -302,9 +305,97 @@ def keytab_to_yaml(buf, args):
 	else:
 		json.dump(final_keytab, sys.stdout, indent=4)
 
-def yaml_to_keytab(fd):
-	data = yaml.load(fd.read(), Loader=yaml.SafeLoader)
-	print('YAML:', data)
+def pack_data(data):
+	return struct.pack('>H', len(data)) + data
+
+def pack_str(string, encoding=DEFAULT_ENCODING):
+	return pack_data(string.encode(encoding))
+
+def raw_principal_to_binary(principal, index):
+	for key in ('realm', 'components'):
+		if key not in principal:
+			raise KeytabComposingError('Mandatory key "%s" not found in principal #%d' % (key, index))
+	name_type_raw = principal.get('name_type_raw', NAME_TYPES['KRB5_NT_PRINCIPAL'])
+	try:
+		_ = int(name_type_raw)
+	except:
+		raise KeytabComposingError('invalid name_type_raw value in principal #%d' % index)
+	data = struct.pack('>H', len(principal['components']))
+	data += pack_str(principal['realm'])
+	for component in principal['components']:
+		data += pack_str(component)
+	data += struct.pack('>i', name_type_raw)
+	return data
+
+def raw_entry_to_binary(entry, index):
+	for key in ('principal', 'timestamp', 'kvno', 'enctype_raw', 'key'):
+		if key not in entry:
+			raise KeytabComposingError('Mandatory key "%s" not found in entry #%d' % (key, index))
+	for key in ('timestamp', 'kvno', 'enctype_raw'):
+		try:
+			assert(int(entry[key]) >= 0)
+		except:
+			raise KeytabComposingError('invalid %s data in entry #%d' % (key, index))
+	data = raw_principal_to_binary(entry['principal'], index)
+	try:
+		key_data = unhexlify(entry['key'])
+	except:
+		raise KeytabComposingError('invalid key data in entry #%d' % index)
+	data += struct.pack('>IBHH', entry['timestamp'], entry['kvno'], entry['enctype_raw'], len(key_data))
+	data += key_data
+	return data
+
+def raw_record_to_binary(record, index):
+	data = b''
+	if 'entry' not in record:
+		raise KeytabComposingError('missing entry in record #%d' % index)
+	data += raw_entry_to_binary(record['entry'], index)
+	if 'tail' in record:
+		try:
+			data += unhexlify(record['tail'])
+		except:
+			raise KeytabComposingError('invalid tail data in record #%d' % index)
+	return struct.pack('>i', len(data)) + data
+
+def raw_hole_to_binary(hole, index):
+	data = b''
+	if 'length' not in record:
+		raise KeytabComposingError('missing length in record #%d' % index)
+	try:
+		length = abs(int(record['length']))
+		if not length:
+			raise KeytabComposingError('illegal zero-length hole in record #%d' % index)
+		data += struct.pack('>i', -length)
+	except:
+		raise KeytabComposingError('invalid length in record #%d' % index)
+	if 'data' in record:
+		try:
+			hole_data = unhexlify(record['data'])
+		except:
+			raise KeytabComposingError('invalid data in record #%d' % index)
+		if len(hole_data) != length:
+			raise KeytabComposingError('length and data do not match in record #%d' % index)
+		data += hole_data
+	else:
+		data += b'\x00' * length
+	return data
+
+def raw_keytab_to_binary(indata):
+	data = bytes([KEYTAB_FIRST_BYTE, 2])
+	for index, record in enumerate(indata.get('records', [])):
+		record_type = record.get('type', 'record')
+		if record_type == 'hole':
+			data += raw_hole_to_binary(record, index)
+		elif record_type == 'record':
+			data += raw_record_to_binary(record, index)
+		else:
+			raise KeytabComposingError('Unknown record type in record #%d' % index)
+	return data
+
+def yaml_to_keytab(buf, args):
+	data = yaml.load(buf, Loader=yaml.SafeLoader)
+	result = raw_keytab_to_binary(data)
+	sys.stdout.buffer.write(result)
 
 def parse_args():
 	parser = argparse.ArgumentParser(description='Keytab <-> YAML/JSON convertor.')
