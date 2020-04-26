@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+
+# Copyright © 2020 Xavier G. <xavier.yamltab@kindwolf.org>
+# This work is free. You can redistribute it and/or modify it under the
+# terms of the Do What The Fuck You Want To Public License, Version 2,
+# as published by Sam Hocevar. See the COPYING file for more details.
+
+# Helper variables:
+yamltab="${YAMLTAB_PATH:-yamltab}"
+
+# Helper functions:
+function edit {
+	if `which editor > /dev/null`; then
+		editor "$@"
+	else
+		"${EDITOR:-vi}" "$@"
+	fi
+}
+
+function cleanup {
+	[ -f "${tmp_file}" ] && unlink "${tmp_file}"
+	[ -f "${tmp_file}.yaml" ] && unlink "${tmp_file}.yaml"
+	[ -d "${tmp_dir}" ] && rmdir "${tmp_dir}"
+}
+
+function exit {
+	cleanup
+	builtin exit $1
+}
+
+# Expect a keytab file as single argument:
+keytab="${1:?Usage: $0 keytab}"
+keytab_filename="$(basename "${keytab}")"
+
+# Redundant with the chmod below; might compensate for some whacky editors?
+umask 0077
+
+# Prepare temporary files:
+tmp_dir="$(mktemp --directory)" || exit $?
+tmp_file="${tmp_dir}/${keytab_filename}"
+touch "${tmp_file}" "${tmp_file}.yaml" || exit $?
+chmod go-rwx "${tmp_file}" "${tmp_file}.yaml" || exit $?
+
+# Dump the given keytab as YAML:
+"${yamltab}" "${keytab}" > "${tmp_file}.yaml" || exit $?
+md5_before="$(md5sum "${tmp_file}.yaml")"
+
+# Edit the keytab as YAML:
+edit "${tmp_file}.yaml"
+rc=$?
+
+# If the YAML dump was not modified, leave the keytab untouched:
+md5_after="$(md5sum "${tmp_file}.yaml")"
+if [ "${md5_before}" == "${md5_after}" ]; then
+	echo "No changes detected, ${keytab} left untouched."
+	exit 0
+else
+	# Convert the YAML into a binary keytab:
+	"${yamltab}" "${tmp_file}.yaml" > "${tmp_file}" || exit $?
+	# Replace the old keytab with the new one:
+	cat "${tmp_file}" > "${keytab}" || exit $?
+fi
+exit $rc
