@@ -299,11 +299,16 @@ def keytab_data(buf, args):
 
 def keytab_to_yaml(buf, args):
 	keytab = keytab_data(buf, args)
-	final_keytab = prepare_serialization(keytab)
+	output_data(keytab, args, 0)
+
+def output_data(data, args, exit=None):
+	serialized_data = prepare_serialization(data)
 	if args.output_format == 'yaml':
-		yaml.dump(final_keytab, sys.stdout, width=160, sort_keys=False)
+		yaml.dump(serialized_data, sys.stdout, width=160, sort_keys=False)
 	else:
-		json.dump(final_keytab, sys.stdout, indent=4)
+		json.dump(serialized_data, sys.stdout, indent=4)
+	if exit is not None:
+		sys.exit(exit)
 
 def pack_data(data):
 	return struct.pack('>H', len(data)) + data
