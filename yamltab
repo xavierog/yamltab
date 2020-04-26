@@ -320,6 +320,12 @@ def output_data(data, args, exit=None):
 	if exit is not None:
 		sys.exit(exit)
 
+def len_data(data):
+	return 2 + len(data)
+
+def len_str(string, encoding=DEFAULT_ENCODING):
+	return len_data(string.encode(encoding))
+
 def pack_data(data):
 	return struct.pack('>H', len(data)) + data
 
@@ -420,6 +426,16 @@ def spn_to_principal(spn, name_type='KRB5_NT_PRINCIPAL'):
 			principal['components'].append(component)
 	return principal
 
+def principal_length(principal):
+	# component count:
+	length = 2
+	length += len_str(principal.get('realm', ''))
+	for component in principal.get('components', []):
+		length += len_str(component)
+	if principal.get('name_type_raw', principal.get('name_type')):
+		length += 4
+	return length
+
 def simple_principal_to_full(inentry, index, entry):
 	if 'principal' in inentry:
 		principal = entry['principal'] = inentry['principal']
@@ -434,6 +450,7 @@ def simple_principal_to_full(inentry, index, entry):
 	elif 'spn' in inentry:
 		entry['spn'] = inentry['spn']
 		entry['principal'] = spn_to_principal(inentry['spn'])
+	return principal_length(entry['principal'])
 
 def simple_kvno_to_full(inentry, index, entry, record):
 	if 'kvno' in inentry:
@@ -447,6 +464,7 @@ def simple_kvno_to_full(inentry, index, entry, record):
 			message = 'Cannot store kvno > 255 without kvno_in_tail in entry #%d'
 			raise KeytabComposingError(message % index)
 		record['tail'] += to_bytes(inentry.get('extra_tail', b''))
+	return 1
 
 def simple_timestamp_to_full(inentry, index, entry):
 	if 'timestamp' in inentry:
@@ -461,6 +479,7 @@ def simple_timestamp_to_full(inentry, index, entry):
 				entry['timestamp'] = int(parsed_date.timestamp())
 			except:
 				raise KeytabParsingError('Invalid date specified in entry #%d' % index)
+	return 4
 
 def simple_enctype_to_full(inentry, index,  entry):
 	if 'enctype_raw' in inentry:
@@ -473,6 +492,7 @@ def simple_enctype_to_full(inentry, index,  entry):
 			message = 'Invalid or unknown enctype specified in entry #%d'
 			message += '; use enctype_raw to enforce an arbitrary value'
 			raise KeytabParsingError(message % index)
+	return 2
 
 def simple_keytab_to_full(indata):
 	now = int(datetime.now().timestamp())
@@ -483,13 +503,17 @@ def simple_keytab_to_full(indata):
 	for index, inentry in enumerate(indata.get('entries', [])):
 		entry = {}
 		record = {'type': 'record', 'entry': entry, 'tail': b''}
-		simple_principal_to_full(inentry, index, entry)
-		simple_kvno_to_full(inentry, index, entry, record)
-		simple_timestamp_to_full(inentry, index, entry)
-		simple_enctype_to_full(inentry, index, entry)
+		length = 0
+		length += simple_principal_to_full(inentry, index, entry)
+		length += simple_kvno_to_full(inentry, index, entry, record)
+		length += simple_timestamp_to_full(inentry, index, entry)
+		length += simple_enctype_to_full(inentry, index, entry)
 		if 'key' in inentry:
 			entry['key'] = inentry['key']
 			entry['key_length'] = len(to_bytes(inentry['key']))
+			length += 2 + entry['key_length']
+		length += len(to_bytes(record['tail']))
+		record['length'] = length
 		data['records'].append(record)
 	return data
 
