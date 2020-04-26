@@ -268,6 +268,11 @@ def simplify_keytab(keytab):
 		simple_entry['kvno'] = entry.get('actual_kvno', entry['kvno'])
 		if 'tail_kvno' in entry:
 			simple_entry['kvno_in_tail'] = True
+		if 'tail' in record:
+			start = 4 if 'tail_kvno' in entry else 0
+			extra_tail = record['tail'][start:]
+			if extra_tail:
+				simple_entry['extra_tail'] = extra_tail
 		for key in ('date', 'enctype', 'key'):
 			if key in entry:
 				simple_entry[key] = entry[key]
@@ -441,6 +446,7 @@ def simple_kvno_to_full(inentry, index, entry, record):
 		elif kvno_too_big:
 			message = 'Cannot store kvno > 255 without kvno_in_tail in entry #%d'
 			raise KeytabComposingError(message % index)
+		record['tail'] += to_bytes(inentry.get('extra_tail', b''))
 
 def simple_timestamp_to_full(inentry, index, entry):
 	if 'timestamp' in inentry:
