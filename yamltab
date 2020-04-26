@@ -420,7 +420,9 @@ def simple_principal_to_full(inentry, index, entry):
 				message = 'Invalid or unknown name_type specified in entry #%d'
 				message += '; use name_type_raw to enforce an arbitrary value'
 				raise KeytabParsingError(message % index)
+		entry['spn'] = principal_to_spn(principal)
 	elif 'spn' in inentry:
+		entry['spn'] = inentry['spn']
 		entry['principal'] = spn_to_principal(inentry['spn'])
 
 def simple_kvno_to_full(inentry, index, entry, record):
@@ -439,6 +441,7 @@ def simple_timestamp_to_full(inentry, index, entry):
 	if 'timestamp' in inentry:
 		entry['timestamp'] = inentry['timestamp']
 	elif 'date' in inentry:
+		entry['date'] = inentry['date']
 		if inentry['date'] == 'now':
 			entry['timestamp'] = now
 		else:
@@ -452,6 +455,7 @@ def simple_enctype_to_full(inentry, index,  entry):
 	if 'enctype_raw' in inentry:
 		entry['enctype_raw'] = inentry['enctype_raw']
 	elif 'enctype' in inentry:
+		entry['enctype'] = inentry['enctype']
 		try:
 			entry['enctype_raw'] = ENC_TYPES[inentry['enctype']]
 		except KeyError:
@@ -467,13 +471,14 @@ def simple_keytab_to_full(indata):
 	}
 	for index, inentry in enumerate(indata.get('entries', [])):
 		entry = {}
-		record = {'entry': entry}
+		record = {'type': 'record', 'entry': entry, 'tail': b''}
 		simple_principal_to_full(inentry, index, entry)
 		simple_kvno_to_full(inentry, index, entry, record)
 		simple_timestamp_to_full(inentry, index, entry)
 		simple_enctype_to_full(inentry, index, entry)
 		if 'key' in inentry:
 			entry['key'] = inentry['key']
+			entry['key_length'] = len(unhexlify(inentry['key']))
 		data['records'].append(record)
 	return data
 
