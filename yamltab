@@ -483,6 +483,8 @@ def yaml_to_keytab(buf, args):
 		# If the provided structure exposes "entries" rather than "records",
 		# then it very likely features the "simple" data layout.
 		data = simple_keytab_to_full(data)
+		if args.simple_to_full:
+			output_data(data, args, 0)
 	result = raw_keytab_to_binary(data)
 	sys.stdout.buffer.write(result)
 
@@ -492,6 +494,7 @@ def parse_args():
 	parser.add_argument('--data-layout', '-l',  dest='data_layout', choices=DATA_LAYOUTS.keys(), default='simple', help='data layout (keytab to YAML/JSON only)')
 	parser.add_argument('--output-format', '-f', dest='output_format', choices=['json', 'yaml'], default='yaml', help='output format (keytab to YAML/JSON only)')
 	parser.add_argument('--v1-endianness', '-e', dest='v1_endianness', choices=['native', 'little', 'big'], default='native', help='Enforce endianness (keytab v1 to YAML/JSON only)')
+	parser.add_argument('--simple-to-full', dest='simple_to_full', action='store_true', default=False, help='Convert from simple to full layout (YAML/JSON input only)')
 	parser.add_argument('input', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer, help='input file; defaults to standard input')
 	args = parser.parse_args()
 	return args
