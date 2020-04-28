@@ -537,6 +537,8 @@ def parse_args():
 	parser.add_argument('--output-format', '-f', dest='output_format', choices=['json', 'yaml'], default='yaml', help='output format (keytab to YAML/JSON only)')
 	parser.add_argument('--v1-endianness', '-e', dest='v1_endianness', choices=['native', 'little', 'big'], default='native', help='Enforce endianness (keytab v1 to YAML/JSON only)')
 	parser.add_argument('--simple-to-full', dest='simple_to_full', action='store_true', default=False, help='Convert from simple to full layout (YAML/JSON input only)')
+	parser.add_argument('--name-types', dest='list_name_types', action='store_true', default=False, help='List all known name types.')
+	parser.add_argument('--enc-types', dest='list_enc_types', action='store_true', default=False, help='List all known encryption types.')
 	parser.add_argument('input', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer, help='input file; defaults to standard input')
 	args = parser.parse_args()
 	return args
@@ -545,6 +547,10 @@ def main():
 	args = parse_args()
 	global VERBOSITY
 	VERBOSITY=args.verbose
+	if args.list_name_types:
+		output_data(NAME_TYPES, args, 0)
+	if args.list_enc_types:
+		output_data(ENC_TYPES, args, 0)
 	buf = args.input
 	first_byte = buf.peek(1)[0]
 	if first_byte == KEYTAB_FIRST_BYTE:
