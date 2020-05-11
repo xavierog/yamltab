@@ -13,7 +13,7 @@ import json
 import yaml
 import struct
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from binascii import hexlify, unhexlify
 
 # Documents used as reference to implement the keytab format:
@@ -37,6 +37,7 @@ DEFAULT_PREFIX=BIG_ENDIAN
 DEFAULT_ENCODING='ascii'
 VERBOSITY=1
 CALCSIZE={}
+now = None
 
 # The following table is based on [3]:
 NAME_TYPES = {
@@ -474,6 +475,9 @@ def simple_timestamp_to_full(inentry, index, entry):
 	elif 'date' in inentry:
 		entry['date'] = inentry['date']
 		if inentry['date'] == 'now':
+			global now
+			if now is None:
+				now = int(datetime.now(timezone.utc).timestamp())
 			entry['timestamp'] = now
 		else:
 			try:
@@ -497,7 +501,6 @@ def simple_enctype_to_full(inentry, index,  entry):
 	return 2
 
 def simple_keytab_to_full(indata):
-	now = int(datetime.now().timestamp())
 	data = {
 		'version': indata.get('version', 2),
 		'records': [],
