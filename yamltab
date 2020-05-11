@@ -26,7 +26,7 @@ DATA_LAYOUT_FULL = 1
 DATA_LAYOUT_SIMPLE = 2
 DATA_LAYOUTS = {'raw': DATA_LAYOUT_RAW, 'full': DATA_LAYOUT_FULL, 'simple': DATA_LAYOUT_SIMPLE}
 
-DATE_TIME_FORMAT = '%Y-%m-%dT%H:%M:%SZ'
+DATE_TIME_FORMAT = '%Y-%m-%dT%H:%M:%S%z'
 
 KEYTAB_FIRST_BYTE = 0x05
 # Default prefix for struct's format strings, defining big-endian byte order:
@@ -231,7 +231,7 @@ def enrich_keytab(keytab):
 		if 'entry' not in record:
 			continue
 		entry = record['entry']
-		entry['date'] = datetime.utcfromtimestamp(entry['timestamp']).strftime(DATE_TIME_FORMAT)
+		entry['date'] = datetime.fromtimestamp(entry['timestamp'], tz=timezone.utc).strftime(DATE_TIME_FORMAT)
 		if 'name_type_raw' in entry['principal']:
 			entry['principal']['name_type'] = int_to_name_type(entry['principal']['name_type_raw'])
 		spn = principal_to_spn(entry['principal'])

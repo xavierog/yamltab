@@ -19,7 +19,7 @@ entries:
     - application.example.com
     realm: EXAMPLE.COM
   kvno: 42
-  date: '2020-04-28T14:04:12Z'
+  date: '2020-04-28T14:04:12+0000'
   enctype: AES256_CTS_HMAC_SHA1_96
   key: 0123456789abcdeffedcba9876543210abcdeffedcba9876543210abcdef1234
 ```
@@ -41,9 +41,9 @@ yamltab offers several "data layouts" for its YAML/JSON output:
 $ yamltab -l raw -f json example.keytab | jq '.records[0].entry.timestamp'
 1588082652
 $ yamltab -l full -f json example.keytab | jq '.records[0].entry.date'
-"2020-04-28T14:04:12Z"
+"2020-04-28T14:04:12+0000"
 $ yamltab -l simple -f json example.keytab | jq '.entries[0].date'
-"2020-04-28T14:04:12Z"
+"2020-04-28T14:04:12+0000"
 ```
 
 ## YAML/JSON input, keytab output
@@ -70,7 +70,7 @@ The simple format is liable to expose two overlapping properties: `spn` and `pri
 
 `name_type_raw`, `enc_type_raw` and `timestamp` override `name_type`, `enc_type` and `date` respectively.
 
-Dates handling is NOT clever. Stick to the `YYYY-mm-DDTHHMMSSZ` format. That said, it is possible to  write `date: now` in simple mode.
+Date handling is NOT clever. Stick to the `YYYY-mm-DDTHHMMSS+ZZZZ` format. That said, it is possible to  write `date: now` in simple mode.
 
 In *simple* mode,`kvno_in_tail: True` can be used to force storage of the key version number as a 32-bit unsigned integer in the tail (i.e. after the entry). `extra_tail` can be used to inject arbitrary data in the tail.
 In *full* mode, the following keys strive to reflect kvno:
