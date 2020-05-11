@@ -315,7 +315,15 @@ def keytab_to_yaml(buf, args):
 def output_data(data, args, exit=None):
 	serialized_data = prepare_serialization(data)
 	if args.output_format == 'yaml':
-		yaml.dump(serialized_data, sys.stdout, width=160, sort_keys=False)
+		yaml_width = 160
+		try:
+			yaml.dump(serialized_data, sys.stdout, width=yaml_width, sort_keys=False)
+		except TypeError as error:
+			# Handle lack of support for sort_keys:
+			if 'sort_keys' in str(error):
+				yaml.dump(serialized_data, sys.stdout, width=yaml_width)
+			else:
+				raise
 	else:
 		json.dump(serialized_data, sys.stdout, indent=4)
 	if exit is not None:
