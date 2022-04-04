@@ -430,7 +430,7 @@ def spn_to_principal(spn, name_type='KRB5_NT_PRINCIPAL'):
 		raise KeytabComposingError('Cannot parse SPN %s into principal' % spn)
 	principal['realm'] = rem.group('realm')
 	principal['components'] = []
-	for name, component in rem.groupdict():
+	for name, component in rem.groupdict().items():
 		if name.startswith('comp') and component is not None:
 			principal['components'].append(component)
 	return principal
