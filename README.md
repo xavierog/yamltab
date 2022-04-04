@@ -11,7 +11,7 @@ Given a keytab file, yamltab will output a YAML representation of its contents, 
 $ yamltab example.keytab
 version: 2
 entries:
- - spn: HTTP/application.example.com@EXAMPLE.COM
+- spn: HTTP/application.example.com@EXAMPLE.COM
   principal:
     name_type: KRB5_NT_PRINCIPAL
     components:
