@@ -387,7 +387,7 @@ def raw_record_to_binary(record, index):
 			raise KeytabComposingError('invalid tail data in record #%d' % index)
 	return struct.pack('>i', len(data)) + data
 
-def raw_hole_to_binary(hole, index):
+def raw_hole_to_binary(record, index):
 	data = b''
 	if 'length' not in record:
 		raise KeytabComposingError('missing length in record #%d' % index)
